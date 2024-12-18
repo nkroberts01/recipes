@@ -1,7 +1,9 @@
 import requests
 import time
+import re
+from typing import List, Optional
 from bs4 import BeautifulSoup
-from src.database.queries import insert_recipe, get_recipes
+from src.database.queries import RecipeRepository
 from src.models.recipe import Recipe
 from src.models.ingredient import Ingredient
 
@@ -19,6 +21,40 @@ def get_recipe_links(url):
     
     return recipe_links
 
+def convert_to_minutes(time_str: str) -> Optional[int]:
+    """
+    Convert time string to minutes, returning None for invalid/not found values.
+    
+    Args:
+        time_str: String representation of time (e.g., "45 minutes", "1 hour", "Not Found")
+        
+    Returns:
+        Optional[int]: Number of minutes, or None if invalid/not found
+    """
+    if not time_str or time_str == 'Not Found':
+        return None
+    
+    # Remove any extra whitespace and convert to lowercase
+    time_str = time_str.strip().lower()
+    
+    try:
+        # Handle hours
+        if 'hour' in time_str or 'hr' in time_str:
+            hours = int(re.findall(r'\d+', time_str)[0])
+            return hours * 60
+        # Handle minutes
+        elif 'min' in time_str:
+            return int(re.findall(r'\d+', time_str)[0])
+        # Handle bare numbers (assume minutes)
+        elif re.findall(r'\d+', time_str):
+            return int(re.findall(r'\d+', time_str)[0])
+    except (IndexError, ValueError):
+        return None
+        
+    return None
+
+
+
 def scrape_recipe(url):
     response = requests.get(url)
     soup = BeautifulSoup(response.content, 'html.parser')
@@ -33,7 +69,7 @@ def scrape_recipe(url):
 
     # get details (prep_time, cook_time, # of servings)
     details_container = soup.find('div', class_='mm-recipes-details')
-    prep_time = cook_time = total_time = servings = 'Not Found'
+    prep_time = cook_time = servings = None
 
     if details_container:
         # Find each detail item
@@ -46,15 +82,13 @@ def scrape_recipe(url):
                 value = value_div.get_text().strip()
                 
                 if 'Prep Time:' in label:
-                    prep_time = value
+                    prep_time = convert_to_minutes(value)
                 elif 'Cook Time:' in label:
-                    cook_time = value
-                elif 'Total Time:' in label:
-                    total_time = value
+                    cook_time = convert_to_minutes(value)
                 elif 'Servings:' in label:
                     servings = value
 
-    # get ingredients, organized by item (ex. sauce may be separate from meatballs)
+    # get ingredients
     ingredients = {}
     ingredient_items = soup.find('div', class_='mm-recipes-structured-ingredients')
     if ingredient_items:
@@ -63,7 +97,6 @@ def scrape_recipe(url):
         for item in ingredient_items.find_all(['p', 'li']):
             if item.name == 'p' and 'mm-recipes-structured-ingredients__list-heading' in item.get('class', []):
                 current_category = item.text.strip()
-                #print(current_category)
                 ingredients[current_category] = []
             elif item.name == 'li' and 'mm-recipes-structured-ingredients__list-item' in item.get('class', []):
                 quantity = item.find('span', attrs={'data-ingredient-quantity': 'true'})
@@ -95,18 +128,95 @@ def scrape_recipe(url):
         'ingredients': ingredients,
         'prep_time': prep_time,
         'cook_time': cook_time,
-        'total_time': total_time,
         'servings': servings
     }
 
-def main(main_url='https://www.allrecipes.com/recipes/16492/everyday-cooking/special-collections/allrecipes-allstars/', num_recipes=50):
-    links = get_recipe_links(main_url)
-    recipes = []
-    for link in links[:num_recipes]:
-        recipe = scrape_recipe(link)
-        print(recipe)
-        insert_recipe(recipe)
-        recipes.append(recipe)
-    return recipes
+def scrape_and_store_recipes(
+    start_url: str = 'https://www.allrecipes.com/recipes/16492/everyday-cooking/special-collections/allrecipes-allstars/',
+    num_recipes: int = 50,
+    delay: float = 1.0
+) -> List[str]:
+    """
+    Scrape recipes from AllRecipes and store them in the database.
+    
+    Args:
+        start_url (str): The starting URL to scrape recipes from
+        num_recipes (int): Maximum number of recipes to scrape
+        delay (float): Delay between requests in seconds
+        
+    Returns:
+        List[str]: List of processed recipe titles
+    """
+    print(f"Starting recipe scraping process. Target: {num_recipes} recipes")
+    
+    # Initialize repository
+    repo = RecipeRepository()
+    processed_recipes = []
+    errors = []
+    
+    try:
+        # Get recipe links
+        print("Fetching recipe links...")
+        links = get_recipe_links(start_url)
+        
+        if not links:
+            print("No recipe links found!")
+            return []
+            
+        print(f"Found {len(links)} recipe links")
+        
+        # Process each link up to num_recipes
+        for i, link in enumerate(links[:num_recipes]):
+            try:
+                print(f"\nProcessing recipe {i+1}/{num_recipes}: {link}")
+                
+                # Scrape the recipe
+                recipe_data = scrape_recipe(link)
+                if not recipe_data:
+                    print(f"Failed to scrape recipe from {link}")
+                    continue
+                
+                # Insert into database
+                recipe_id = repo.insert_recipe(recipe_data)
+                if recipe_id:
+                    processed_recipes.append(recipe_data['title'])
+                    print(f"Successfully stored recipe: {recipe_data['title']}")
+                else:
+                    print(f"Failed to store recipe: {recipe_data['title']}")
+                
+                # Respect the website by waiting between requests
+                time.sleep(delay)
+                
+            except Exception as e:
+                error_msg = f"Error processing {link}: {str(e)}"
+                print(error_msg)
+                errors.append(error_msg)
+                continue
+        
+    except Exception as e:
+        print(f"Fatal error in scraping process: {str(e)}")
+        
+    finally:
+        # Print summary
+        print("\n=== Scraping Summary ===")
+        print(f"Total recipes processed: {len(processed_recipes)}")
+        print(f"Total errors: {len(errors)}")
+        if errors:
+            print("\nErrors encountered:")
+            for error in errors[:5]:  # Show first 5 errors
+                print(f"- {error}")
+            if len(errors) > 5:
+                print(f"...and {len(errors) - 5} more errors")
+                
+        return processed_recipes
 
-recipes = main()
+if __name__ == "__main__":
+    # Example usage:
+    processed_recipes = scrape_and_store_recipes(
+        num_recipes=100,  # Start with a small number for testing
+        delay=0.5  # Be nice to the website
+    )
+    
+    print("\nProcessed Recipes:")
+    for title in processed_recipes:
+        print(f"- {title}")

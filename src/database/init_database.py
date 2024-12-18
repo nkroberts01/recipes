@@ -1,5 +1,7 @@
+from mimetypes import init
 import psycopg2
-from config.database_config import DatabaseConfig
+from src.config.db_connection import get_connection
+from src.config.database_config import DatabaseConfig
 
 def create_database():
     """Create the recipe_manager database"""
@@ -29,45 +31,60 @@ def create_database():
         cursor.close()
         conn.close()
 
-def init_tables():
-    """Initialize database tables"""
-    conn = psycopg2.connect(DatabaseConfig.get_connection_string())
-    cursor = conn.cursor()
-    
-    try:
-        # Create tables
+def init_tables(connection):
+    with connection.cursor() as cursor:
+        # Create recipes table
         cursor.execute("""
-        CREATE TABLE IF NOT EXISTS recipes (
-            id SERIAL PRIMARY KEY,
-            title VARCHAR(255),
-            url TEXT,
-            prep_time VARCHAR(50),
-            cook_time VARCHAR(50),
-            total_time VARCHAR(50),
-            servings VARCHAR(10),
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-
-        CREATE TABLE IF NOT EXISTS ingredients (
-            id SERIAL PRIMARY KEY,
-            recipe_id INTEGER REFERENCES recipes(id) ON DELETE CASCADE,
-            section VARCHAR(50),
-            quantity VARCHAR(50),
-            unit VARCHAR(50),
-            name VARCHAR(255),
-            additional TEXT
-        );
+            CREATE TABLE IF NOT EXISTS recipes (
+                id SERIAL PRIMARY KEY,
+                title VARCHAR(255) NOT NULL,
+                url TEXT,
+                prep_time INTEGER,
+                cook_time INTEGER,
+                total_time INTEGER,
+                servings VARCHAR(10)
+            );
         """)
         
-        conn.commit()
-        print("Tables created successfully!")
-    except Exception as e:
-        print(f"Error creating tables: {e}")
-        conn.rollback()
-    finally:
-        cursor.close()
-        conn.close()
+        # Create ingredients table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS ingredients (
+                id SERIAL PRIMARY KEY,
+                recipe_id INT REFERENCES recipes(id) ON DELETE CASCADE,
+                section VARCHAR(50),
+                quantity VARCHAR(50),
+                unit VARCHAR(50),
+                name VARCHAR(255),
+                additional TEXT
+            );
+        """)
+        
+        # Create trigger function
+        cursor.execute("""
+            CREATE OR REPLACE FUNCTION update_total_time()
+            RETURNS TRIGGER AS $$
+            BEGIN
+                NEW.total_time = COALESCE(NEW.prep_time, 0) + COALESCE(NEW.cook_time, 0);
+                IF NEW.prep_time IS NULL AND NEW.cook_time IS NULL THEN
+                    NEW.total_time = NULL;
+                END IF;
+                RETURN NEW;
+            END;
+            $$ LANGUAGE plpgsql;
+        """)
+        
+        # Create trigger
+        cursor.execute("""
+            DROP TRIGGER IF EXISTS calculate_total_time ON recipes;
+            CREATE TRIGGER calculate_total_time
+                BEFORE INSERT OR UPDATE OF prep_time, cook_time
+                ON recipes
+                FOR EACH ROW
+                EXECUTE FUNCTION update_total_time();
+        """)
+        
+        connection.commit()
 
 if __name__ == "__main__":
     create_database()
-    init_tables()
+    init_tables(get_connection())

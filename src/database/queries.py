@@ -184,11 +184,11 @@ class RecipeRepository:
         cursor = conn.cursor()
 
         try:
-            # Insert the recipe and get its ID
+            # Insert the recipe and get its ID - removed total_time from the INSERT
             cursor.execute(
                 """
-                INSERT INTO recipes (title, url, prep_time, cook_time, total_time, servings)
-                VALUES (%s, %s, %s, %s, %s, %s)
+                INSERT INTO recipes (title, url, prep_time, cook_time, servings)
+                VALUES (%s, %s, %s, %s, %s)
                 RETURNING id;
                 """,
                 (
@@ -196,7 +196,6 @@ class RecipeRepository:
                     recipe_data['url'],
                     recipe_data['prep_time'],
                     recipe_data['cook_time'],
-                    recipe_data['total_time'],
                     recipe_data['servings']
                 )
             )

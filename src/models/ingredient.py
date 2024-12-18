@@ -18,7 +18,7 @@ class Ingredient:
             "additional": self.additional,
             "section": self.section
         }
-    
+
     @classmethod
     def from_dict(cls, data: dict) -> 'Ingredient':
         return cls(

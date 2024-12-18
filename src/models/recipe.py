@@ -7,9 +7,9 @@ from src.models.ingredient import Ingredient
 class Recipe:
     title: str
     url: Optional[str]
-    prep_time: str
-    cook_time: str
-    total_time: str
+    prep_time: Optional[int]
+    cook_time: Optional[int]
+    total_time: Optional[int]
     servings: str
     ingredients: Dict[str, List[Ingredient]]
     id: Optional[int] = None
@@ -42,9 +42,9 @@ class Recipe:
             id=data.get("id"),
             title=data["title"],
             url=data.get("url"),
-            prep_time=data["prep_time"],
-            cook_time=data["cook_time"],
-            total_time=data["total_time"],
+            prep_time=data.get("prep_time"),
+            cook_time=data.get("cook_time"),
+            total_time=data.get("total_time"),
             servings=data["servings"],
             ingredients=ingredients,
             created_at=datetime.fromisoformat(data["created_at"]) if data.get("created_at") else None
